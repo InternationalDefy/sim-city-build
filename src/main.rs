@@ -9,7 +9,7 @@ use winit::{
     window::{WindowBuilder, Window},
 };
 use winit_input_helper::WinitInputHelper;
-use std::vec;
+use std::{vec};
 use std::collections::BTreeMap;
 // use serde::{Serialize, Deserialize};
 use serde_derive::{Serialize,Deserialize};
@@ -24,6 +24,7 @@ pub enum Decision {
     Build,
     Wait,
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DecisionMaker {
     pub decisionMap : BTreeMap<Decision, u32>,
@@ -92,7 +93,7 @@ struct Animal {
     pub ability : u32,
     pub lifetime : u32,
     pub position : (i32, i32),
-    viewDistance: u32,
+    view_distance: u32,
     pub next_decision : Decision,
 }
 
@@ -104,7 +105,7 @@ impl Animal {
             ability : a.ability,
             lifetime : 0,
             position : pos,
-            viewDistance: a.viewDistance,
+            view_distance: a.view_distance,
             next_decision : a.next_decision,
         }
     }
@@ -161,6 +162,7 @@ impl Tickable for Animal {
 #[derive(Clone, Debug)]
 struct Environment {
     tag : String,
+    pub alive : bool,
     pub auto_interact : bool,
     pub hp: i32,
     pub difficulty : u32,
@@ -186,6 +188,7 @@ pub enum DrawType {
 impl Environment {
     pub fn spwan(e : &Environment, pos:(i32,i32)) ->Environment {
         Environment { 
+            alive: true,
             auto_interact : e.auto_interact,
             tag: e.tag.clone(), 
             hp: e.hp, 
@@ -198,6 +201,18 @@ impl Environment {
             d: e.d,
         }
     }
+
+    fn consume(&mut self, num : i32) {
+        if !self.alive {
+            return
+        }
+        self.hp -= num;
+        if self.hp <= 0 {
+            self.alive = false;
+            return
+        }
+    }
+
     pub fn get_center_pixel_pos(&self) -> (i32, i32) {
         (((GRID_WIDTH + 1) / 2 + GRID_WIDTH * self.position.0 as u32) as i32,
         ((GRID_HEIGHT + 1) / 2 + GRID_HEIGHT * self.position.1 as u32) as i32)
@@ -207,23 +222,16 @@ impl Environment {
 fn distance(e : &Environment, a: &Animal) -> i32 {
     i32::abs(e.position.0-a.position.0) + i32::abs(e.position.1-a.position.1)
 }
+
 // 只拿来做决策,不用来做更新,因此不需要引用
 fn find_environments(a:&Animal, ve:&Vec<Environment>) -> Vec<Environment> {
     let mut vec = vec!();
     for e in ve {
-        if distance(e, a) <= a.viewDistance as i32 {
+        if distance(e, a) <= a.view_distance as i32 {
             vec.push(e.clone());
         }
     }
     vec
-}
-
-
-struct Map {
-    ve: Vec<Environment>,
-    // va : Vec<Animal>,
-    a : Animal,
-    width : i32, height: i32,
 }
 
 const WIDTH: u32 = 50;
@@ -235,7 +243,7 @@ const GRID_HEIGHT: u32 = WINDOW_HEIGHT/HEIGHT;
 
 fn build_window() -> (EventLoop<()>, Window, Pixels) {
     let event_loop = EventLoop::new();
-    let mut input = WinitInputHelper::new();
+    // let input = WinitInputHelper::new();
     let window = {
         let size = 
             LogicalSize::new(WINDOW_WIDTH as f64, WINDOW_HEIGHT as f64);
@@ -249,7 +257,7 @@ fn build_window() -> (EventLoop<()>, Window, Pixels) {
             .unwrap()
     };
 
-    let mut pixels = {
+    let pixels = {
         let window_size = window.inner_size();
         let surface_texture = 
             SurfaceTexture::new(window_size.width, window_size.height, &window);
@@ -259,8 +267,6 @@ fn build_window() -> (EventLoop<()>, Window, Pixels) {
 }
 
 fn visualize_map(ve : &Vec<Environment>, va : &Vec<Animal>, screen: &mut [u8]) {
-    let x = (WINDOW_HEIGHT / 2) as i32;
-    let y = (WINDOW_WIDTH / 2) as i32;
     for e in ve {
         let pos = e.get_center_pixel_pos();
         match e.draw_type {
@@ -342,7 +348,32 @@ fn draw_pixel(screen: &mut [u8], x:i32, y:i32, r:u8,g:u8,b:u8,a:u8) {
     screen[x * WINDOW_HEIGHT as usize * 4 + y * 4 + 3] = a;
 }
 
-fn execute_decision(ve: &mut Vec<Environment>, a :&mut Animal) {
+fn make_interaction(e : &mut Environment, a : &mut Animal, rng: &mut oorandom::Rand32) {
+    let dif = e.difficulty;
+    let roll = rng.rand_u32() % 20;
+    let dix = roll + a.ability;
+    e.consume(1);
+    if dix >= dif {
+        a.hp += e.reward.0 as i32;
+        a.ability += e.reward.1;
+    } else {
+        a.consume(e.penalty as i32);
+    }
+
+}
+
+fn execute_decision(ve: &mut Vec<Environment>, a :&mut Animal, rng :&mut oorandom::Rand32) {
+    let mut vme : Vec<&mut Environment> = vec![];
+    for e in ve.iter_mut() {
+        if e.position == a.position {
+            vme.push(e);
+        }
+    }
+    for me in vme.iter_mut() {
+        if me.auto_interact {
+            make_interaction(me, a, rng);
+        }
+    }
     match a.next_decision {
         Decision::MoveUp => {
             a.move_inc((1, 0));
@@ -357,14 +388,41 @@ fn execute_decision(ve: &mut Vec<Environment>, a :&mut Animal) {
             a.move_inc((0, 1));
         },
         Decision::Interact => {
-
+            for me in vme.iter_mut() {
+                if !me.auto_interact {
+                    make_interaction(me, a, rng);
+                }
+            }
         },
         Decision::Build => {
-
+            a.consume(2);
+            ve.push(Environment{
+                alive: true,
+                tag: String::from("shelter"), 
+                auto_interact : true,
+                hp: 5, 
+                difficulty: 0, 
+                penalty: 0, 
+                reward: (1,0),
+                position: (0,0),
+                draw_type: DrawType::Rect,
+                color: (0, 0xff, 0, 0x7f),
+                d:GRID_WIDTH,
+            });
         },
-        Decision::Wait => {},
+        // Decision::Wait => {},
         _ => {},
     }
+}
+
+fn garbage_collection(ve: Vec<Environment>) -> Vec<Environment> {
+    let mut ret = vec![];
+    for e in ve {
+        if e.alive {
+            ret.push(e);
+        }
+    }
+    ret
 }
 
 fn main() {
@@ -374,6 +432,7 @@ fn main() {
     let mut rng_initializer = oorandom::Rand32::new(initializer_seed);
     let shelter_chance = 10;
     let shelter = Environment{
+        alive:true,
         tag: String::from("shelter"), 
         auto_interact : true,
         hp: 5, 
@@ -387,6 +446,7 @@ fn main() {
     };
     let challenge_chance = 2;
     let challenge = Environment{
+        alive:true,
         tag: String::from("challenge"), 
         auto_interact : false,
         hp: 1, 
@@ -400,6 +460,7 @@ fn main() {
     };
     let danger_chance = 2;
     let danger = Environment{
+        alive:true,
         tag: String::from("danger"), 
         auto_interact : false,
         hp: i32::MAX, 
@@ -440,7 +501,7 @@ fn main() {
         ability : 5,
         lifetime : 0,
         position : (0, 0),
-        viewDistance: 5,
+        view_distance: 5,
         next_decision : Decision::Wait,
     };
     let mut va = vec![
@@ -449,16 +510,25 @@ fn main() {
     let mut d_maker = DecisionMaker::new();
     let mut tick : u128 = 0;
     let (event_loop, window, mut pixels) = build_window();
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run(move |_, _, control_flow| {
         // 剩下的loop操作也在这里写.
         clear_pixels(pixels.get_frame_mut());
         visualize_map(&ve, &va, pixels.get_frame_mut());
         pixels.render().unwrap();
         // FIXME 暂时.
         va[0].next_decision = d_maker.make_decision(&mut rng_calculator);
-        execute_decision(&mut ve, &mut va[0]);
+        execute_decision(&mut ve, &mut va[0], &mut rng_calculator);
+        for a in va.iter_mut() {
+            a.tick();
+        }
         tick += 1;
+        ve = garbage_collection(ve.clone());
         window.request_redraw();
+        if !va[0].alive {
+            println!("Player Dead in tick {:?}", tick);
+            *control_flow = ControlFlow::Exit;
+            return;
+        } 
     });
 }
 
