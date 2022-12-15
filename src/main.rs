@@ -1,15 +1,14 @@
 extern crate oorandom;
 extern crate serde;
 
-use pixels::{Error, Pixels, SurfaceTexture};
+use pixels::{Pixels, SurfaceTexture};
 use winit::{
     dpi::LogicalSize,
-    event::{Event, VirtualKeyCode},
+    // event::{Event, VirtualKeyCode},
     event_loop::{ControlFlow, EventLoop},
     window::{WindowBuilder, Window},
 };
-use winit_input_helper::WinitInputHelper;
-use std::{vec};
+use std::{vec, collections::HashMap};
 use std::collections::BTreeMap;
 // use serde::{Serialize, Deserialize};
 use serde_derive::{Serialize,Deserialize};
@@ -27,11 +26,11 @@ pub enum Decision {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DecisionMaker {
-    pub decisionMap : BTreeMap<Decision, u32>,
+    pub decision_map : BTreeMap<Decision, u32>,
 }
 
 impl DecisionMaker {
-    pub fn new() -> Self {
+    pub fn default() -> Self {
         use crate::Decision::*;
         let mut map = BTreeMap::new();
         map.insert(MoveUp, 2);
@@ -42,17 +41,17 @@ impl DecisionMaker {
         map.insert(Build, 0);
         map.insert(Wait, 10);
         DecisionMaker{
-            decisionMap : map
+            decision_map : map
         }
     }
     pub fn make_decision(&self, rng : &mut oorandom::Rand32) -> Decision {
         let mut sum = 0;
-        for (_, v) in &self.decisionMap {
+        for (_, v) in &self.decision_map {
             sum += v;
         }
         let rand = rng.rand_u32() % sum;
         sum = 0;
-        for (d, v) in &self.decisionMap {
+        for (d, v) in &self.decision_map {
             sum += v;
             if sum >= rand {
                 // print!("sum :{:?}, rand:{:?}",sum, rand);
@@ -62,16 +61,16 @@ impl DecisionMaker {
         Decision::Wait
     }
     pub fn decrease_chance(&mut self, d:Decision, i: u32) {
-        let de = (self.decisionMap[&d] as i32 - i as i32) as i32;
+        let de = (self.decision_map[&d] as i32 - i as i32) as i32;
         let chance = if de>0 {de} else {0} as u32;
-        self.decisionMap.insert(d.clone(), chance);
+        self.decision_map.insert(d.clone(), chance);
     }
     pub fn increase_chance(&mut self, d: Decision, i : u32) {
-        let chance = self.decisionMap[&d] + i;
-        self.decisionMap.insert(d.clone(), chance);
+        let chance = self.decision_map[&d] + i;
+        self.decision_map.insert(d.clone(), chance);
     }
     pub fn mutate_chance(&mut self, mu : u32, rng : &mut oorandom::Rand32) {
-        for (_, i) in &mut self.decisionMap {
+        for (_, i) in &mut self.decision_map {
             let rand = rng.rand_u32() % 2;
             if rand == 0 {
                 *i += mu;
@@ -81,6 +80,101 @@ impl DecisionMaker {
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
+pub enum Direction {
+    Up,
+    Dowm,
+    Right, 
+    Left,
+}
+
+
+#[derive(Clone, Debug, Serialize, Deserialize, Hash, PartialEq, Eq)]
+pub enum DecisionFactor {
+    DistanceDirection(u32, Direction, EnvironmentTag),
+    CurrentLocation(EnvironmentTag),
+    CurrentHp(i32),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DecisionMakingTree {
+    decision_chain : HashMap<Vec<DecisionFactor>, DecisionMaker>,
+    // FIXME 历史记录
+    decision_history : Vec<(u32, Vec<DecisionFactor>, Decision)>,
+}
+
+impl DecisionMakingTree {
+    // FIXME 实现Serde
+    pub fn from_json() -> DecisionMakingTree {
+        DecisionMakingTree { decision_chain: HashMap::new(), decision_history:vec![]}
+    }
+    pub fn to_json(self) {
+
+    }
+    pub fn reward() {
+
+    }
+    pub fn mutate() {
+
+    }
+    // 以上 FIXME
+
+    fn generate_default_decision_maker(&mut self, vdf : Vec<DecisionFactor>) -> DecisionMaker {
+        self.decision_chain.insert(vdf, DecisionMaker::default());
+        DecisionMaker::default()
+    }
+
+    fn get_decision_maker(&mut self, vdf : Vec<DecisionFactor>) -> DecisionMaker {
+        let decision_chain_get = self.decision_chain.get(&vdf);
+        let decision_maker = match decision_chain_get {
+            Some(d_maker) => d_maker.clone(),
+            None => self.generate_default_decision_maker(vdf),
+        };
+        decision_maker
+    }
+
+    fn calculate_decision_factors(&mut self, a: &Animal, ve : Vec<Environment>) -> Vec<DecisionFactor> {
+        let mut vdf = vec![];
+        for e in ve {
+            if e.position == a.position {
+                vdf.push(DecisionFactor::CurrentLocation(e.tag));
+                continue;
+            } 
+            let dis = distance(&e, a);
+            let dir = if i32::abs(e.position.0 - a.position.0) > i32::abs(e.position.1 - e.position.1) {
+                if e.position.0 > a.position.0 {
+                    Direction::Up
+                } else {
+                    Direction::Dowm
+                }
+            } else {
+                if e.position.1 > a.position.1 {
+                    Direction::Right
+                } else {
+                    Direction::Left
+                }
+            };
+            vdf.push(DecisionFactor::DistanceDirection(dis as u32, dir, e.tag));
+        }
+        vdf.push(DecisionFactor::CurrentHp(a.hp));
+        vdf
+    }
+
+    pub fn make_a_decision(&mut self, a: &Animal, ve : Vec<Environment>, rng: &mut oorandom::Rand32) -> Decision {
+        let vdf = self.calculate_decision_factors(a, ve);
+        print!("vdf: {:?}", &vdf);
+        let decision = self.make_a_decision_impl(vdf, rng);
+        println!("made decision: {:?}", &decision);
+        decision
+    }
+
+    fn make_a_decision_impl(&mut self, vdf : Vec<DecisionFactor>, rng:&mut oorandom::Rand32) -> Decision {
+        let decision_maker = self.get_decision_maker(vdf);
+        decision_maker.make_decision(rng)
+    }
+}
+
 pub trait Tickable {
     fn tick(&mut self);
 }
@@ -159,9 +253,17 @@ impl Tickable for Animal {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, PartialEq, Eq)] 
+pub enum EnvironmentTag {
+    DANGER,
+    CHALLENGE,
+    SHELTER,
+    DEFAULT,    
+}
+
 #[derive(Clone, Debug)]
 struct Environment {
-    tag : String,
+    tag : EnvironmentTag,
     pub alive : bool,
     pub auto_interact : bool,
     pub hp: i32,
@@ -395,10 +497,10 @@ fn execute_decision(ve: &mut Vec<Environment>, a :&mut Animal, rng :&mut oorando
             }
         },
         Decision::Build => {
-            a.consume(2);
+            a.consume(5);
             ve.push(Environment{
                 alive: true,
-                tag: String::from("shelter"), 
+                tag: EnvironmentTag::SHELTER, 
                 auto_interact : true,
                 hp: 5, 
                 difficulty: 0, 
@@ -433,7 +535,7 @@ fn main() {
     let shelter_chance = 10;
     let shelter = Environment{
         alive:true,
-        tag: String::from("shelter"), 
+        tag: EnvironmentTag::SHELTER, 
         auto_interact : true,
         hp: 5, 
         difficulty: 0, 
@@ -447,7 +549,7 @@ fn main() {
     let challenge_chance = 2;
     let challenge = Environment{
         alive:true,
-        tag: String::from("challenge"), 
+        tag: EnvironmentTag::CHALLENGE, 
         auto_interact : false,
         hp: 1, 
         difficulty: 10, 
@@ -461,7 +563,7 @@ fn main() {
     let danger_chance = 2;
     let danger = Environment{
         alive:true,
-        tag: String::from("danger"), 
+        tag: EnvironmentTag::DANGER, 
         auto_interact : false,
         hp: i32::MAX, 
         difficulty: 10, 
@@ -507,8 +609,8 @@ fn main() {
     let mut va = vec![
         Animal::spwan(&normal, (25,25))
     ];
-    let mut d_maker = DecisionMaker::new();
     let mut tick : u128 = 0;
+    let mut decision_making_tree = DecisionMakingTree::from_json();
     let (event_loop, window, mut pixels) = build_window();
     event_loop.run(move |_, _, control_flow| {
         // 剩下的loop操作也在这里写.
@@ -516,7 +618,8 @@ fn main() {
         visualize_map(&ve, &va, pixels.get_frame_mut());
         pixels.render().unwrap();
         // FIXME 暂时.
-        va[0].next_decision = d_maker.make_decision(&mut rng_calculator);
+        let vde = find_environments(&va[0], &ve);
+        va[0].next_decision = decision_making_tree.make_a_decision(&va[0], vde, &mut rng_calculator);
         execute_decision(&mut ve, &mut va[0], &mut rng_calculator);
         for a in va.iter_mut() {
             a.tick();
