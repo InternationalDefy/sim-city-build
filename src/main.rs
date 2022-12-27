@@ -8,7 +8,7 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::{WindowBuilder, Window},
 };
-use std::{vec, collections::HashMap};
+use std::{vec, collections::HashMap, str::FromStr};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::prelude::*;
@@ -73,13 +73,16 @@ impl DecisionMaker {
         self.decision_map.insert(d.clone(), chance);
     }
     pub fn mutate_chance(&mut self, mu : u32, rng : &mut oorandom::Rand32) {
-        for (_, i) in &mut self.decision_map {
+        let mut vdis = vec![];
+        for (dis, _) in &mut self.decision_map {
+            vdis.push(dis.clone());
+        }
+        for dis in vdis {
             let rand = rng.rand_u32() % 2;
-            if rand == 0 {
-                *i += mu;
-            } else {
-                *i -= mu;                
-            }
+            match rand {
+                0 => &self.increase_chance(dis, mu),
+                _ => &self.decrease_chance(dis, mu),
+            };
         }
     }
 }
@@ -110,8 +113,8 @@ struct DecisionMakingTree {
 }
 
 impl DecisionMakingTree {
-    pub fn from_json() -> DecisionMakingTree {
-        let path = Path::new("decision_making_tree.json");
+    pub fn from_json(_path_name: String) -> DecisionMakingTree {
+        let path = Path::new(_path_name.as_str());
         let mut file = File::open(&path).unwrap();
         let mut serialized : String= String::new(); 
         file.read_to_string(&mut serialized).unwrap();
@@ -126,11 +129,11 @@ impl DecisionMakingTree {
     //     file.write(serialized.as_bytes()).unwrap();
     // }
 
-    pub fn to_json(&self) {
+    pub fn to_json(&self, json_path:String) {
         let serialized = serde_json::to_string(&self);
         match serialized {
             Ok(res) => {
-                let path = Path::new("decision_making_tree.json");
+                let path = Path::new(json_path.as_str());
                 let mut file = File::create(&path).unwrap();
                 file.write(res.as_bytes()).unwrap();
             },
@@ -139,14 +142,28 @@ impl DecisionMakingTree {
             }
         }
     }
-
-    pub fn reward() {
-
+    // FIXME 实现
+    fn mutate_impl(mut self, _mutate_factor:u32, rng :&mut oorandom::Rand32) -> DecisionMakingTree {
+        for (_, dm) in &mut self.decision_chain {
+            dm.mutate_chance(_mutate_factor, rng);
+        }
+        self
     }
-    pub fn mutate() {
 
+    fn reward_impl(mut self, _reward_factor:u32) -> DecisionMakingTree {
+        for (_, vdf, dis) in &self.decision_history {
+            self.decision_chain.get_mut(vdf).unwrap().increase_chance(dis.clone(), _reward_factor);
+        }
+        self
     }
-    // 以上 FIXME
+    
+    pub fn reward(&self, _reward_factor:u32) -> DecisionMakingTree {
+        self.clone().reward_impl(_reward_factor)
+    }
+
+    pub fn mutate(&self, _mutate_factor:u32, rng :&mut oorandom::Rand32) -> DecisionMakingTree {
+        self.clone().mutate_impl(_mutate_factor, rng)
+    }
 
     fn generate_default_decision_maker(&mut self, vdf : Vec<DecisionFactor>) -> DecisionMaker {
         self.decision_chain.insert(vdf, DecisionMaker::default());
@@ -555,10 +572,8 @@ fn garbage_collection(ve: Vec<Environment>) -> Vec<Environment> {
     ret
 }
 
-fn main() {
-    let calculator_seed = 64;
+fn generate_map() -> (Vec<Environment>,Vec<Animal>) {
     let initializer_seed = 64;
-    let mut rng_calculator = oorandom::Rand32::new(calculator_seed);
     let mut rng_initializer = oorandom::Rand32::new(initializer_seed);
     let shelter_chance = 10;
     let shelter = Environment{
@@ -634,18 +649,21 @@ fn main() {
         view_distance: 5,
         next_decision : Decision::Wait,
     };
-    let mut va = vec![
+    let va = vec![
         Animal::spwan(&normal, (25,25))
     ];
+    (ve, va)
+}
+
+fn decision_making_single_loop(
+    _show_visuals: bool, 
+    mut _decision_making_tree: DecisionMakingTree,
+) -> (DecisionMakingTree, u128) {
     let mut tick : u128 = 0;
-    let show_visualization = false;
-    // let mut decision_making_tree = DecisionMakingTree::from_json();
-    let mut decision_making_tree = DecisionMakingTree{
-        decision_history:vec!(), 
-        decision_chain:HashMap::new()
-    };
-    
-    if show_visualization {
+    let calculator_seed = 64;
+    let mut rng_calculator = oorandom::Rand32::new(calculator_seed);
+    let (mut ve,mut va) = generate_map();
+    if _show_visuals {
         let (event_loop, window, mut pixels) = build_window();
         event_loop.run(move |_, _, control_flow| {
             // 剩下的loop操作也在这里写.
@@ -653,7 +671,7 @@ fn main() {
             visualize_map(&ve, &va, pixels.get_frame_mut());
             pixels.render().unwrap();
             let vde = find_environments(&va[0], &ve);
-            va[0].next_decision = decision_making_tree.make_a_decision(tick, &va[0], vde, &mut rng_calculator);
+            va[0].next_decision = _decision_making_tree.make_a_decision(tick, &va[0], vde, &mut rng_calculator);
             execute_decision(&mut ve, &mut va[0], &mut rng_calculator);
             for a in va.iter_mut() {
                 a.tick();
@@ -664,14 +682,13 @@ fn main() {
             if !va[0].alive {
                 println!("Player Dead in tick {:?}", tick);
                 *control_flow = ControlFlow::Exit;
-                decision_making_tree.to_json();
                 return;
             }         
         });
     } else {
         while va[0].alive {
             let vde = find_environments(&va[0], &ve);
-            va[0].next_decision = decision_making_tree.make_a_decision(tick, &va[0], vde, &mut rng_calculator);
+            va[0].next_decision = _decision_making_tree.make_a_decision(tick, &va[0], vde, &mut rng_calculator);
             execute_decision(&mut ve, &mut va[0], &mut rng_calculator);
             for a in va.iter_mut() {
                 a.tick();
@@ -680,10 +697,67 @@ fn main() {
             ve = garbage_collection(ve.clone());
             if !va[0].alive {
                 println!("Player Dead in tick {:?}", tick);
-                decision_making_tree.to_json();
             }
         }
     }    
+    (_decision_making_tree, tick)
+}
+
+fn decision_making_run(
+    _show_visuals: bool, 
+    _run_count:u32,
+    _mutate_factor:u32,
+    _reward_factor:u32,
+    _sample_count:u32,
+    _from_json:Option<String>, 
+    _to_json:Option<String>) {
+    let mutator_seed = 64;
+    let mut rng_mutator = oorandom::Rand32::new(mutator_seed);
+    let mut decision_making_tree = match _from_json {
+        Some(json_path) => DecisionMakingTree::from_json(json_path),
+        None => DecisionMakingTree{
+            decision_history:vec!(), 
+            decision_chain:HashMap::new()
+        }
+    };
+    for run in 1.._run_count {
+        println!("RUNNING COUNT {:?}", run);
+        let mut result_vec = vec![];
+        for sample in 1.._sample_count {
+            println!("SAMPLE COUNT {:?}", sample);
+            let decision_making_sample = decision_making_tree.clone().mutate(_mutate_factor, &mut rng_mutator);
+            result_vec.push(decision_making_single_loop(_show_visuals, decision_making_sample));
+        }
+        let (mut rdmt, mut max_tick) = (
+            DecisionMakingTree{
+                decision_history:vec!(), 
+                decision_chain:HashMap::new()
+        }, 0);
+        for (dmt, tick) in result_vec {
+            if tick > max_tick {
+                rdmt = dmt;
+                max_tick = tick;
+            }
+        }
+        decision_making_tree = rdmt.reward(_reward_factor);
+    }
+    match _to_json {
+        Some(json_path) => decision_making_tree.to_json(json_path),
+        None => (),
+    }
+}
+
+fn main() {
+    decision_making_run(
+        false,
+        10,
+        2,
+        2,
+        10,
+        None,
+        // Some(String::from_str("decision_making_tree.json").unwrap()),
+        Some(String::from_str("decision_making_trainning_result_0.json").unwrap()),
+    );
 }
 
 fn clear_pixels(pixels : &mut [u8]) {
