@@ -666,24 +666,25 @@ fn decision_making_single_loop(
     if _show_visuals {
         let (event_loop, window, mut pixels) = build_window();
         event_loop.run(move |_, _, control_flow| {
-            // 剩下的loop操作也在这里写.
-            clear_pixels(pixels.get_frame_mut());
-            visualize_map(&ve, &va, pixels.get_frame_mut());
-            pixels.render().unwrap();
-            let vde = find_environments(&va[0], &ve);
-            va[0].next_decision = _decision_making_tree.make_a_decision(tick, &va[0], vde, &mut rng_calculator);
-            execute_decision(&mut ve, &mut va[0], &mut rng_calculator);
-            for a in va.iter_mut() {
-                a.tick();
-            }
-            tick += 1;
-            ve = garbage_collection(ve.clone());
-            window.request_redraw();
             if !va[0].alive {
                 println!("Player Dead in tick {:?}", tick);
                 *control_flow = ControlFlow::Exit;
                 return;
-            }         
+            } else {
+                // 剩下的loop操作也在这里写.
+                clear_pixels(pixels.get_frame_mut());
+                visualize_map(&ve, &va, pixels.get_frame_mut());
+                pixels.render().unwrap();
+                let vde = find_environments(&va[0], &ve);
+                va[0].next_decision = _decision_making_tree.make_a_decision(tick, &va[0], vde, &mut rng_calculator);
+                execute_decision(&mut ve, &mut va[0], &mut rng_calculator);
+                for a in va.iter_mut() {
+                    a.tick();
+                }
+                tick += 1;
+                ve = garbage_collection(ve.clone());
+                window.request_redraw();
+            }
         });
     } else {
         while va[0].alive {
@@ -720,10 +721,10 @@ fn decision_making_run(
             decision_chain:HashMap::new()
         }
     };
-    for run in 1.._run_count {
+    for run in 0.._run_count {
         println!("RUNNING COUNT {:?}", run);
         let mut result_vec = vec![];
-        for sample in 1.._sample_count {
+        for sample in 0.._sample_count {
             println!("SAMPLE COUNT {:?}", sample);
             let decision_making_sample = decision_making_tree.clone().mutate(_mutate_factor, &mut rng_mutator);
             result_vec.push(decision_making_single_loop(_show_visuals, decision_making_sample));
@@ -749,14 +750,14 @@ fn decision_making_run(
 
 fn main() {
     decision_making_run(
-        false,
-        10,
-        2,
-        2,
-        10,
-        None,
-        // Some(String::from_str("decision_making_tree.json").unwrap()),
+        true,
+        1,
+        1,
+        1,
+        1,
         Some(String::from_str("decision_making_trainning_result_0.json").unwrap()),
+        // None,
+        Some(String::from_str("decision_making_trainning_result_1.json").unwrap()),
     );
 }
 
